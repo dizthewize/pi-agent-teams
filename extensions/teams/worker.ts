@@ -104,7 +104,16 @@ function buildTaskPrompt(style: TeamsStyle, agentName: string, task: TeamTask, p
 	const strings = getTeamsStrings(style);
 	const footer = planOnly
 		? "Produce a detailed implementation plan only. Do NOT make any changes or implement anything yet. Your plan will be reviewed before you can proceed."
-		: "Do the work now. When finished, reply with a concise summary and any key outputs.";
+		: [
+			"Do the work now. When finished, produce a structured result with:",
+			"1. What was done (implementation choices, rationale)",
+			"2. Files created or modified (with paths)",
+			"3. Verification steps taken (tests run, outputs checked)",
+			"4. Any blockers encountered and how they were resolved",
+			"5. Next steps or follow-up work, if any",
+			"",
+			"Be specific — the leader reviews this to decide what happens next.",
+		].join("\n");
 
 	const actor = strings.memberTitle.toLowerCase();
 	return [
