@@ -69,9 +69,8 @@ import {
 	isPlanApprovedMessage,
 	isPlanRejectedMessage,
 } from "../extensions/teams/protocol.js";
-import { DelegationTracker, pollLeaderInbox } from "../extensions/teams/leader-inbox.js";
+import { LeaderWakeTracker, pollLeaderInbox } from "../extensions/teams/leader-inbox.js";
 import { getParentSessionId, shouldSilenceInheritedParentAttachClaimWarning } from "../extensions/teams/session-parent.js";
-import { branchSelectionNote, ensureSessionFileMaterialized, resolveBranchLeafSelection } from "../extensions/teams/session-branching.js";
 import { SessionManager, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
@@ -907,200 +906,6 @@ console.log("\n10b. branched sessions + inherited attach claims");
 			);
 		}
 	}
-
-	const branchFromUser = SessionManager.create(tmpRoot, sessionsDir);
-	branchFromUser.appendModelChange("openai-codex", "gpt-5.4");
-	branchFromUser.appendThinkingLevelChange("minimal");
-	branchFromUser.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "What should we do next?" }],
-		timestamp: Date.now(),
-	});
-	const stableAssistantId = branchFromUser.appendMessage(assistantMessage);
-	const currentUserId = branchFromUser.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Investigate something, then delegate it." }],
-		timestamp: Date.now(),
-	});
-	const activeTurnToolUse: AssistantMessage = {
-		role: "assistant",
-		content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } }],
-		api: "test",
-		provider: "test",
-		model: "test",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "toolUse",
-		timestamp: Date.now(),
-	};
-	branchFromUser.appendMessage(activeTurnToolUse);
-	branchFromUser.appendMessage({
-		role: "toolResult",
-		toolCallId: "call-1",
-		toolName: "read",
-		content: [{ type: "text", text: "README contents" }],
-		isError: false,
-		timestamp: Date.now(),
-	});
-	const unfinishedLeafId = branchFromUser.getLeafId();
-	assert(unfinishedLeafId !== null, "unfinished branch test leaf exists");
-	if (unfinishedLeafId) {
-		const selection = resolveBranchLeafSelection(branchFromUser.getBranch(unfinishedLeafId), unfinishedLeafId);
-		assert(selection.adjusted, "unfinished turn adjusts branch leaf away from active leaf");
-		assertEq(selection.leafId, stableAssistantId, "unfinished turn branches from latest completed assistant message");
-		assertEq(branchSelectionNote(selection), "branch(clean-turn)", "unfinished turn note marks clean-turn branch");
-		assert(
-			selection.replayUserMessage?.role === "user",
-			"unfinished turn keeps the active user request available for replay into the child branch",
-		);
-
-		const branchedPath = branchFromUser.createBranchedSession(selection.leafId);
-		assert(branchedPath !== null, "clean-turn branch session created");
-		if (selection.replayUserMessage) {
-			branchFromUser.appendMessage(JSON.parse(JSON.stringify(selection.replayUserMessage)) as Parameters<typeof branchFromUser.appendMessage>[0]);
-		}
-		if (branchedPath) await ensureSessionFileMaterialized(branchFromUser, branchedPath);
-		const childEntries = branchFromUser.getEntries();
-		assert(childEntries.some((entry) => entry.id === stableAssistantId), "clean-turn child keeps latest completed assistant");
-		assert(
-			childEntries.some(
-				(entry) =>
-					entry.type === "message" &&
-					isRecord(entry.message) &&
-					entry.message.role === "user" &&
-					JSON.stringify(entry.message.content).includes("Investigate something, then delegate it."),
-			),
-			"clean-turn child replays the active user request onto the cleaned branch",
-		);
-		assert(
-			childEntries.filter((entry) => entry.id === currentUserId).length === 0,
-			"clean-turn child does not keep the original unfinished-turn user entry id",
-		);
-		assert(
-			!childEntries.some((entry) => entry.type === "message" && isRecord(entry.message) && entry.message.role === "toolResult"),
-			"clean-turn child excludes trailing tool results from active turn",
-		);
-		assert(
-			!childEntries.some(
-				(entry) =>
-					entry.type === "message" &&
-					isRecord(entry.message) &&
-					entry.message.role === "assistant" &&
-					entry.id !== stableAssistantId,
-			),
-			"clean-turn child excludes in-progress assistant tool-use turn",
-		);
-	}
-
-	const compactedTurn = SessionManager.create(tmpRoot, sessionsDir);
-	compactedTurn.appendModelChange("openai-codex", "gpt-5.4");
-	compactedTurn.appendThinkingLevelChange("minimal");
-	compactedTurn.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Earlier request" }],
-		timestamp: Date.now(),
-	});
-	const compactedAssistantId = compactedTurn.appendMessage(assistantMessage);
-	const compactionId = compactedTurn.appendCompaction("summarized", compactedAssistantId, 1234);
-	compactedTurn.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Current request after compaction" }],
-		timestamp: Date.now(),
-	});
-	compactedTurn.appendMessage(activeTurnToolUse);
-	compactedTurn.appendMessage({
-		role: "toolResult",
-		toolCallId: "call-1",
-		toolName: "read",
-		content: [{ type: "text", text: "README contents" }],
-		isError: false,
-		timestamp: Date.now(),
-	});
-	const compactedLeafId = compactedTurn.getLeafId();
-	assert(compactedLeafId !== null, "compacted branch test leaf exists");
-	if (compactedLeafId) {
-		const selection = resolveBranchLeafSelection(compactedTurn.getBranch(compactedLeafId), compactedLeafId);
-		assert(selection.adjusted, "compacted unfinished turn adjusts branch leaf");
-		assertEq(selection.leafId, compactionId, "compacted unfinished turn branches from the entry immediately before the active user");
-		assert(selection.replayUserMessage?.role === "user", "compacted unfinished turn replays the active user request");
-		const branchedPath = compactedTurn.createBranchedSession(selection.leafId);
-		assert(branchedPath !== null, "compacted branch session created");
-		if (selection.replayUserMessage) {
-			compactedTurn.appendMessage(JSON.parse(JSON.stringify(selection.replayUserMessage)) as Parameters<typeof compactedTurn.appendMessage>[0]);
-		}
-		const childEntries = compactedTurn.getEntries();
-		assert(childEntries.some((entry) => entry.id === compactionId), "compacted child keeps the compaction entry before the active user");
-		assert(
-			childEntries.some(
-				(entry) =>
-					entry.type === "message" &&
-					isRecord(entry.message) &&
-					entry.message.role === "user" &&
-					JSON.stringify(entry.message.content).includes("Current request after compaction"),
-			),
-			"compacted child replays the active user after the preserved compaction boundary",
-		);
-		assertEq(branchSelectionNote(selection), "branch(clean-turn)", "compacted unfinished turn keeps clean-turn note");
-	}
-
-	const userOnlyTurn = SessionManager.create(tmpRoot, sessionsDir);
-	userOnlyTurn.appendModelChange("openai-codex", "gpt-5.4");
-	userOnlyTurn.appendThinkingLevelChange("minimal");
-	userOnlyTurn.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Only user context so far" }],
-		timestamp: Date.now(),
-	});
-	userOnlyTurn.appendMessage(activeTurnToolUse);
-	userOnlyTurn.appendMessage({
-		role: "toolResult",
-		toolCallId: "call-1",
-		toolName: "read",
-		content: [{ type: "text", text: "README contents" }],
-		isError: false,
-		timestamp: Date.now(),
-	});
-	const userOnlyLeafId = userOnlyTurn.getLeafId();
-	assert(userOnlyLeafId !== null, "user-only fallback test leaf exists");
-	if (userOnlyLeafId) {
-		const selection = resolveBranchLeafSelection(userOnlyTurn.getBranch(userOnlyLeafId), userOnlyLeafId);
-		assert(selection.adjusted, "user-only unfinished turn still adjusts branch leaf");
-		assert(selection.leafId !== userOnlyLeafId, "user-only fallback rewinds away from the active unfinished leaf");
-		assert(selection.replayUserMessage?.role === "user", "user-only fallback keeps the active user message for replay");
-		assertEq(branchSelectionNote(selection), "branch(clean-turn)", "user-only fallback keeps the clean-turn note");
-		const branchedPath = userOnlyTurn.createBranchedSession(selection.leafId);
-		assert(branchedPath !== null, "user-only fallback branch session created");
-		if (selection.replayUserMessage) {
-			userOnlyTurn.appendMessage(JSON.parse(JSON.stringify(selection.replayUserMessage)) as Parameters<typeof userOnlyTurn.appendMessage>[0]);
-		}
-		if (branchedPath) {
-			await ensureSessionFileMaterialized(userOnlyTurn, branchedPath);
-			assert(fs.existsSync(branchedPath), "user-only fallback materializes a real session file");
-		}
-	}
-
-	const completedTurn = SessionManager.create(tmpRoot, sessionsDir);
-	completedTurn.appendMessage({
-		role: "user",
-		content: [{ type: "text", text: "Done already" }],
-		timestamp: Date.now(),
-	});
-	const completedAssistantId = completedTurn.appendMessage(assistantMessage);
-	const completedLeafId = completedTurn.getLeafId();
-	assert(completedLeafId !== null, "completed branch test leaf exists");
-	if (completedLeafId) {
-		const selection = resolveBranchLeafSelection(completedTurn.getBranch(completedLeafId), completedLeafId);
-		assert(!selection.adjusted, "completed turn keeps requested leaf");
-		assertEq(selection.leafId, completedLeafId, "completed turn branches from current leaf");
-		assertEq(completedAssistantId, completedLeafId, "completed leaf stays on assistant reply");
-		assertEq(branchSelectionNote(selection), "branch", "completed turn keeps plain branch note");
-	}
 }
 
 // ── 11. /team done (end-of-run cleanup) ──────────────────────────────
@@ -1309,7 +1114,7 @@ console.log("\n14. leader-inbox LLM message injection");
 		cwd: inboxTeamDir,
 		ui: { notify: () => {} },
 		sessionManager: { getSessionId: () => "inbox-team" },
-		isIdle: () => false,
+		isIdle: () => true,
 	} as unknown as ExtensionContext;
 
 	await pollLeaderInbox({
@@ -1416,8 +1221,7 @@ console.log("\n14. leader-inbox LLM message injection");
 		leadName,
 		style,
 		pendingPlanApprovals: new Map(),
-		enqueueHook: () => {},
-		hooksEnabled: true,
+		enqueueHook: () => {}, // hooks present → should qualify allDone
 		sendLeaderLlmMessage: (content, options) => {
 			llmMessages.push({ content, options });
 		},
@@ -1430,18 +1234,16 @@ console.log("\n14. leader-inbox LLM message injection");
 		assert(!hookMsg.content.includes("Review results and determine next steps"), "no premature wrap-up prompt when hooks active");
 	}
 
-	// Hooks disabled should not qualify all-done messages just because a callback is wired.
-	const t4 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Post-review cleanup", description: "", owner: "dave" });
-	await completeTask(inboxTeamDir, inboxTaskListId, t4.id, "dave", "Cleanup complete");
+	// Test stalled-team wake-up: workers report idle, no tasks are in progress, but pending work remains.
+	const t4 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Follow up on flaky tests", description: "", owner: undefined });
+	const wakeTracker = new LeaderWakeTracker();
 	const ts4 = new Date().toISOString();
 	await writeToMailbox(inboxTeamDir, TEAM_MAILBOX_NS, leadName, {
-		from: "dave",
+		from: "alice",
 		text: JSON.stringify({
 			type: "idle_notification",
-			from: "dave",
+			from: "alice",
 			timestamp: ts4,
-			completedTaskId: t4.id,
-			completedStatus: "completed",
 		}),
 		timestamp: ts4,
 	});
@@ -1455,38 +1257,32 @@ console.log("\n14. leader-inbox LLM message injection");
 		leadName,
 		style,
 		pendingPlanApprovals: new Map(),
-		enqueueHook: () => {},
-		hooksEnabled: false,
 		sendLeaderLlmMessage: (content, options) => {
 			llmMessages.push({ content, options });
 		},
+		wakeTracker,
 	});
 
-	assert(llmMessages.length === 1, "one LLM message sent when hooks callback is wired but disabled");
-	const disabledHookMsg = llmMessages[0];
-	if (disabledHookMsg) {
-		assert(!disabledHookMsg.content.includes("quality gates are still running"), "disabled hooks do not qualify the per-task allDone summary");
-		assert(disabledHookMsg.content.includes("Review results and determine next steps"), "disabled hooks keep the normal per-task allDone summary");
+	assert(llmMessages.length === 1, "idle + pending state wakes the leader once");
+	const stalledMsg = llmMessages[0];
+	if (stalledMsg) {
+		assert(stalledMsg.content.includes("pending task(s) remain"), "stalled-team wake-up mentions pending tasks");
+		assert(stalledMsg.content.includes(t4.id), "stalled-team wake-up includes pending task id");
+		assert(stalledMsg.content.includes("Review the task graph"), "stalled-team wake-up tells leader to continue autonomously");
+		assertEq(stalledMsg.options?.deliverAs, undefined, "idle stalled-team wake-up starts a fresh turn when leader is idle");
 	}
 
-	// Batch-complete auto-wake should use the same hooks-enabled check.
-	const t5 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Batch wake task", description: "", owner: "erin" });
-	await completeTask(inboxTeamDir, inboxTaskListId, t5.id, "erin", "Batch wake done");
 	const ts5 = new Date().toISOString();
 	await writeToMailbox(inboxTeamDir, TEAM_MAILBOX_NS, leadName, {
-		from: "erin",
+		from: "bob",
 		text: JSON.stringify({
 			type: "idle_notification",
-			from: "erin",
+			from: "bob",
 			timestamp: ts5,
-			completedTaskId: t5.id,
-			completedStatus: "completed",
 		}),
 		timestamp: ts5,
 	});
 
-	const batchTracker = new DelegationTracker();
-	batchTracker.addBatch([t5.id]);
 	llmMessages.length = 0;
 	await pollLeaderInbox({
 		ctx: stubCtx,
@@ -1496,21 +1292,13 @@ console.log("\n14. leader-inbox LLM message injection");
 		leadName,
 		style,
 		pendingPlanApprovals: new Map(),
-		enqueueHook: () => {},
-		hooksEnabled: false,
-		delegationTracker: batchTracker,
 		sendLeaderLlmMessage: (content, options) => {
 			llmMessages.push({ content, options });
 		},
+		wakeTracker,
 	});
 
-	assert(llmMessages.length === 2, "per-task completion plus batch-complete messages sent when a tracked delegation finishes");
-	const batchMsg = llmMessages.find((entry) => entry.content.includes("All delegated tasks completed"));
-	assert(batchMsg !== undefined, "batch-complete notification sent");
-	if (batchMsg) {
-		assert(!batchMsg.content.includes("Quality gates are still running"), "disabled hooks do not qualify the batch-complete summary");
-		assert(batchMsg.content.includes("Review the results and continue."), "disabled hooks keep the normal batch-complete summary");
-	}
+	assert(llmMessages.length === 0, "stalled-team wake-up is deduplicated until task state changes");
 }
 
 // ── 15. docs/help drift guard ────────────────────────────────────────
