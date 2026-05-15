@@ -72,7 +72,7 @@ import {
 	isPlanApprovedMessage,
 	isPlanRejectedMessage,
 } from "../extensions/teams/protocol.js";
-import { DelegationTracker, pollLeaderInbox } from "../extensions/teams/leader-inbox.js";
+import { DelegationTracker, LeaderWakeTracker, pollLeaderInbox } from "../extensions/teams/leader-inbox.js";
 import { getParentSessionId, shouldSilenceInheritedParentAttachClaimWarning } from "../extensions/teams/session-parent.js";
 import { branchSelectionNote, ensureSessionFileMaterialized, resolveBranchLeafSelection } from "../extensions/teams/session-branching.js";
 import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -1492,7 +1492,7 @@ console.log("\n14. leader-inbox LLM message injection");
 		cwd: inboxTeamDir,
 		ui: { notify: () => {} },
 		sessionManager: { getSessionId: () => "inbox-team" },
-		isIdle: () => false,
+		isIdle: () => true,
 	} as unknown as ExtensionContext;
 
 	await pollLeaderInbox({
@@ -1613,20 +1613,58 @@ console.log("\n14. leader-inbox LLM message injection");
 		assert(!hookMsg.content.includes("Review results and determine next steps"), "no premature wrap-up prompt when hooks active");
 	}
 
-	// Hooks disabled should not qualify all-done messages just because a callback is wired.
-	const t4 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Post-review cleanup", description: "", owner: "dave" });
-	await completeTask(inboxTeamDir, inboxTaskListId, t4.id, "dave", "Cleanup complete");
+	// Test stalled-team wake-up: workers report idle, no tasks are in progress, but pending work remains.
+	const t4 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Follow up on flaky tests", description: "", owner: undefined });
+	const wakeTracker = new LeaderWakeTracker();
 	const ts4 = new Date().toISOString();
+	await writeToMailbox(inboxTeamDir, TEAM_MAILBOX_NS, leadName, {
+		from: "alice",
+		text: JSON.stringify({
+			type: "idle_notification",
+			from: "alice",
+			timestamp: ts4,
+		}),
+		timestamp: ts4,
+	});
+
+	llmMessages.length = 0;
+	await pollLeaderInbox({
+		ctx: stubCtx,
+		teamId: "inbox-team",
+		teamDir: inboxTeamDir,
+		taskListId: inboxTaskListId,
+		leadName,
+		style,
+		pendingPlanApprovals: new Map(),
+		sendLeaderLlmMessage: (content, options) => {
+			llmMessages.push({ content, options });
+		},
+		wakeTracker,
+	});
+
+	assert(llmMessages.length === 1, "idle + pending state wakes the leader once");
+	const stalledMsg = llmMessages[0];
+	if (stalledMsg) {
+		assert(stalledMsg.content.includes("pending task(s) remain"), "stalled-team wake-up mentions pending tasks");
+		assert(stalledMsg.content.includes(t4.id), "stalled-team wake-up includes pending task id");
+		assert(stalledMsg.content.includes("Review the task graph"), "stalled-team wake-up tells leader to continue autonomously");
+		assertEq(stalledMsg.options?.deliverAs, undefined, "idle stalled-team wake-up starts a fresh turn when leader is idle");
+	}
+
+	// Hooks disabled should not qualify all-done messages just because a callback is wired.
+	const t5 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Post-review cleanup", description: "", owner: "dave" });
+	await completeTask(inboxTeamDir, inboxTaskListId, t5.id, "dave", "Cleanup complete");
+	const ts5 = new Date().toISOString();
 	await writeToMailbox(inboxTeamDir, TEAM_MAILBOX_NS, leadName, {
 		from: "dave",
 		text: JSON.stringify({
 			type: "idle_notification",
 			from: "dave",
-			timestamp: ts4,
-			completedTaskId: t4.id,
+			timestamp: ts5,
+			completedTaskId: t5.id,
 			completedStatus: "completed",
 		}),
-		timestamp: ts4,
+		timestamp: ts5,
 	});
 
 	llmMessages.length = 0;
@@ -1653,23 +1691,23 @@ console.log("\n14. leader-inbox LLM message injection");
 	}
 
 	// Batch-complete auto-wake should use the same hooks-enabled check.
-	const t5 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Batch wake task", description: "", owner: "erin" });
-	await completeTask(inboxTeamDir, inboxTaskListId, t5.id, "erin", "Batch wake done");
-	const ts5 = new Date().toISOString();
+	const t6 = await createTask(inboxTeamDir, inboxTaskListId, { subject: "Batch wake task", description: "", owner: "erin" });
+	await completeTask(inboxTeamDir, inboxTaskListId, t6.id, "erin", "Batch wake done");
+	const ts6 = new Date().toISOString();
 	await writeToMailbox(inboxTeamDir, TEAM_MAILBOX_NS, leadName, {
 		from: "erin",
 		text: JSON.stringify({
 			type: "idle_notification",
 			from: "erin",
-			timestamp: ts5,
-			completedTaskId: t5.id,
+			timestamp: ts6,
+			completedTaskId: t6.id,
 			completedStatus: "completed",
 		}),
-		timestamp: ts5,
+		timestamp: ts6,
 	});
 
 	const batchTracker = new DelegationTracker();
-	batchTracker.addBatch([t5.id]);
+	batchTracker.addBatch([t6.id]);
 	llmMessages.length = 0;
 	await pollLeaderInbox({
 		ctx: stubCtx,
@@ -1694,7 +1732,6 @@ console.log("\n14. leader-inbox LLM message injection");
 		assert(!batchMsg.content.includes("Quality gates are still running"), "disabled hooks do not qualify the batch-complete summary");
 		assert(batchMsg.content.includes("Review the results and continue."), "disabled hooks keep the normal batch-complete summary");
 	}
-}
 
 // ── 15. docs/help drift guard ────────────────────────────────────────
 console.log("\n15. docs/help drift guard");
