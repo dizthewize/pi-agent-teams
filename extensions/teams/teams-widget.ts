@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { TeammateHandle } from "./teammate-rpc.js";
+import type { TeammateRpc } from "./teammate-rpc.js";
 import type { ActivityTracker } from "./activity-tracker.js";
 import type { TeamTask } from "./task-store.js";
 import type { TeamConfig, TeamMember } from "./team-config.js";
@@ -10,15 +10,11 @@ import { formatMemberDisplayName, getTeamsStrings } from "./teams-style.js";
 import {
 	DISPLAY_STATUS_COLOR,
 	DISPLAY_STATUS_ICON,
-	addUsageBreakdown,
-	formatAggregatedUsageBreakdown,
 	formatElapsed,
-	formatUsageBreakdown,
+	formatTokens,
 	getMemberModel,
 	getMemberThinking,
-	getTaskProgressSummary,
 	getVisibleWorkerNames,
-	isUsageBreakdownEmpty,
 	isTeamDone,
 	padRight,
 	renderPolicySummary,
@@ -29,7 +25,7 @@ import {
 import type { DisplayStatus, LeaderModelInfo } from "./teams-ui-shared.js";
 
 export interface WidgetDeps {
-	getTeammates(): Map<string, TeammateHandle>;
+	getTeammates(): Map<string, TeammateRpc>;
 	getTracker(): ActivityTracker;
 	getTasks(): TeamTask[];
 	getTeamConfig(): TeamConfig | null;
@@ -48,8 +44,9 @@ interface WidgetRow {
 	displayName: string;
 	statusKey: DisplayStatus;
 	pending: number;
+	inProgress: number;
 	completed: number;
-	usageStr: string; // "—" for chairman
+	tokensStr: string; // "—" for chairman
 	activityText: string;
 	/** Compact time-in-current-state string, e.g. "3m12s". Empty for leader. */
 	elapsedStr: string;
@@ -57,8 +54,8 @@ interface WidgetRow {
 	modelLabel: string | null;
 	/** Thinking level (e.g. "high") or null. */
 	thinkingLabel: string | null;
-	/** Active task subject (if any). */
-	activeTaskSubject: string | null;
+	/** Active task ID (e.g. "#3") when the worker has an in-progress task, else null. */
+	activeTaskId: string | null;
 }
 
 function shortTeamId(teamId: string): string {
@@ -142,13 +139,14 @@ export function createTeamsWidget(deps: WidgetDeps): WidgetFactory {
 						displayName: strings.leaderControlTitle,
 						statusKey: "idle",
 						pending: leadTasks.filter((t) => t.status === "pending").length,
+						inProgress: leadTasks.filter((t) => t.status === "in_progress").length,
 						completed: leadTasks.filter((t) => t.status === "completed").length,
-						usageStr: "\u2014",
+						tokensStr: "\u2014",
 						activityText: "",
 						elapsedStr: "",
 						modelLabel: null,
 						thinkingLabel: null,
-						activeTaskSubject: null,
+						activeTaskId: null,
 					});
 				}
 
@@ -178,34 +176,30 @@ export function createTeamsWidget(deps: WidgetDeps): WidgetFactory {
 							displayName: formatMemberDisplayName(style, name),
 							statusKey,
 							pending: owned.filter((t) => t.status === "pending").length,
+							inProgress: owned.filter((t) => t.status === "in_progress").length,
 							completed: owned.filter((t) => t.status === "completed").length,
-							usageStr: formatUsageBreakdown(activity.usage, { fallbackTotal: activity.totalTokens }),
+							tokensStr: formatTokens(activity.totalTokens),
 							activityText: toolActivity(activity.currentToolName),
 							elapsedStr: elapsed,
 							modelLabel: memberModel ? shortModelLabel(memberModel) : null,
 							thinkingLabel: memberThinking,
-							activeTaskSubject: activeTask ? `#${String(activeTask.id)} ${activeTask.subject}` : null,
+							activeTaskId: activeTask ? `#${String(activeTask.id)}` : null,
 						});
 					}
 
 					// ── Compute column widths ──
-					const progress = getTaskProgressSummary(tasks);
-					const totalPending = progress.pending;
-					const totalInProgress = progress.inProgress;
-					const totalCompleted = progress.completed;
-					let totalUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-					let fallbackOnlyTotal = 0;
-					for (const name of workerNames) {
-						const activity = tracker.get(name);
-						totalUsage = addUsageBreakdown(totalUsage, activity.usage);
-						if (activity.totalTokens > 0 && isUsageBreakdownEmpty(activity.usage)) fallbackOnlyTotal += activity.totalTokens;
-					}
-					const totalUsageStr = formatAggregatedUsageBreakdown(totalUsage, fallbackOnlyTotal);
+					const totalPending = tasks.filter((t) => t.status === "pending").length;
+					const totalInProgress = tasks.filter((t) => t.status === "in_progress").length;
+					const totalCompleted = tasks.filter((t) => t.status === "completed").length;
+					let totalTokensRaw = 0;
+					for (const name of workerNames) totalTokensRaw += tracker.get(name).totalTokens;
+					const totalTokensStr = formatTokens(totalTokensRaw);
 
 					const nameColWidth = Math.max(...rows.map((r) => visibleWidth(r.displayName)));
 					const pW = Math.max(...rows.map((r) => String(r.pending).length), String(totalPending).length);
+					const iW = Math.max(...rows.map((r) => String(r.inProgress).length), String(totalInProgress).length);
 					const cW = Math.max(...rows.map((r) => String(r.completed).length), String(totalCompleted).length);
-					const usageW = Math.max(...rows.map((r) => r.usageStr.length), totalUsageStr.length);
+					const tokW = Math.max(...rows.map((r) => r.tokensStr.length), totalTokensStr.length);
 
 					// ── Render rows ──
 					for (const r of rows) {
@@ -213,27 +207,25 @@ export function createTeamsWidget(deps: WidgetDeps): WidgetFactory {
 						const styledName = theme.bold(r.displayName);
 						const statusLabel = theme.fg(DISPLAY_STATUS_COLOR[r.statusKey], padRight(r.statusKey, 9));
 						const pNum = String(r.pending).padStart(pW);
+						const iNum = String(r.inProgress).padStart(iW);
 						const cNum = String(r.completed).padStart(cW);
-						const usageStr = r.usageStr.padStart(usageW);
+						const tokStr = r.tokensStr.padStart(tokW);
 						const cols = theme.fg(
 							"dim",
-							` \u00b7 ${pNum} pending \u00b7 ${cNum} complete \u00b7 ${usageStr}`,
+							` \u00b7 ${pNum} pending \u00b7 ${iNum} active \u00b7 ${cNum} done \u00b7 ${tokStr} tokens`,
 						);
 						const elapsedLabel = r.elapsedStr ? " " + theme.fg("dim", r.elapsedStr) : "";
 						const actLabel = r.activityText ? "  " + theme.fg("warning", r.activityText) : "";
+						// Active task ID inline (compact, stable height)
+						const taskIdLabel = r.activeTaskId ? " " + theme.fg("warning", r.activeTaskId) : "";
 						// Model + thinking badge (compact)
 						const badges: string[] = [];
 						if (r.modelLabel) badges.push(r.modelLabel);
 						if (r.thinkingLabel && r.thinkingLabel !== "off") badges.push(`t:${r.thinkingLabel}`);
 						const badgeStr = badges.length > 0 ? "  " + theme.fg("muted", badges.join(" \u00b7 ")) : "";
 
-						const row = ` ${icon} ${padRight(styledName, nameColWidth)} ${statusLabel}${elapsedLabel}${cols}${actLabel}${badgeStr}`;
+						const row = ` ${icon} ${padRight(styledName, nameColWidth)} ${statusLabel}${taskIdLabel}${elapsedLabel}${cols}${actLabel}${badgeStr}`;
 						lines.push(truncateToWidth(row, width));
-						// Active task on second line (indented, only when actively working)
-						if (r.activeTaskSubject) {
-							const taskLine = `     ${theme.fg("dim", "\u2514")} ${theme.fg("warning", r.activeTaskSubject)}`;
-							lines.push(truncateToWidth(taskLine, width));
-						}
 					}
 
 					// ── Total row ──
@@ -241,13 +233,16 @@ export function createTeamsWidget(deps: WidgetDeps): WidgetFactory {
 					lines.push(truncateToWidth(sepLine, width));
 
 					const totalLabel = theme.bold("Total");
-					const pctLabel = theme.fg("success", padRight(`${progress.percent}%`, 9));
+					const totalTaskCount = totalPending + totalInProgress + totalCompleted;
+					const pct = totalTaskCount > 0 ? Math.round((totalCompleted / totalTaskCount) * 100) : 0;
+					const pctLabel = theme.fg("success", padRight(`${pct}%`, 9));
 					const tpNum = String(totalPending).padStart(pW);
+					const tiNum = String(totalInProgress).padStart(iW);
 					const tcNum = String(totalCompleted).padStart(cW);
-					const totalUsagePadded = totalUsageStr.padStart(usageW);
+					const ttokStr = totalTokensStr.padStart(tokW);
 					const totalSuffix = theme.fg(
 						"muted",
-						` \u00b7 ${totalInProgress} in progress \u00b7 ${tpNum} pending \u00b7 ${tcNum} complete \u00b7 ${totalUsagePadded}`,
+						` \u00b7 ${tpNum} pending \u00b7 ${tiNum} active \u00b7 ${tcNum} done \u00b7 ${ttokStr} tokens`,
 					);
 					// nameColWidth + 4 = " ◆ " + name; then " " + pctLabel fills the status column
 					const totalRow = ` ${padRight(totalLabel, nameColWidth + 3)} ${pctLabel}${totalSuffix}`;

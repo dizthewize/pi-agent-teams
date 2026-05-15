@@ -1,17 +1,17 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeName } from "./names.js";
 import { getTeamDir, getTeamsRootDir } from "./paths.js";
-import type { TeammateHandle } from "./teammate-rpc.js";
+import type { TeammateRpc } from "./teammate-rpc.js";
 import type { TeamConfig, TeamMember } from "./team-config.js";
 import type { TeamsStyle } from "./teams-style.js";
 import { formatMemberDisplayName, getTeamsStrings } from "./teams-style.js";
-import { resolveDisplayStatus, formatElapsed, formatUsageBreakdown, getVisibleWorkerNames, lastMessageSummary, toolActivity } from "./teams-ui-shared.js";
+import { resolveDisplayStatus, formatElapsed, formatTokens, getMemberModel, getMemberThinking, lastMessageSummary, shortModelLabel, toolActivity } from "./teams-ui-shared.js";
 import type { ActivityTracker } from "./activity-tracker.js";
 import { listTasks } from "./task-store.js";
 
 export async function handleTeamListCommand(opts: {
 	ctx: ExtensionCommandContext;
-	teammates: Map<string, TeammateHandle>;
+	teammates: Map<string, TeammateRpc>;
 	getTeamConfig: () => TeamConfig | null;
 	getTracker: () => ActivityTracker;
 	style: TeamsStyle;
@@ -50,7 +50,13 @@ export async function handleTeamListCommand(opts: {
 		const tool = toolActivity(activity.currentToolName);
 		const elapsedTag = elapsed ? ` ${elapsed}` : "";
 		const toolTag = tool ? ` (${tool})` : "";
-		lines.push(`${formatMemberDisplayName(style, name)}: ${displayStatus}${elapsedTag}${toolTag} [${kind}]`);
+		const memberModel = getMemberModel(cfg);
+		const memberThinking = getMemberThinking(cfg);
+		const badges: string[] = [];
+		if (memberModel) badges.push(shortModelLabel(memberModel));
+		if (memberThinking && memberThinking !== "off") badges.push(`t:${memberThinking}`);
+		const badgeTag = badges.length > 0 ? `  ${badges.join("/")}` : "";
+		lines.push(`${formatMemberDisplayName(style, name)}: ${displayStatus}${elapsedTag}${badgeTag}${toolTag} [${kind}]`);
 	}
 
 	ctx.ui.notify(lines.join("\n"), "info");
@@ -152,7 +158,7 @@ export async function handleTeamEnvCommand(opts: {
 export async function handleTeamStatusCommand(opts: {
 	ctx: ExtensionCommandContext;
 	rest: string[];
-	teammates: Map<string, TeammateHandle>;
+	teammates: Map<string, TeammateRpc>;
 	getTeamConfig: () => TeamConfig | null;
 	getTracker: () => ActivityTracker;
 	teamId: string;
@@ -167,7 +173,6 @@ export async function handleTeamStatusCommand(opts: {
 	const effectiveTlId = taskListId ?? teamId;
 
 	const nameRaw = rest[0];
-	const allTasks = await listTasks(teamDir, effectiveTlId);
 
 	// If no name, show summary of all workers (same as member_status with no name).
 	if (!nameRaw) {
@@ -175,15 +180,19 @@ export async function handleTeamStatusCommand(opts: {
 		const cfgByName = new Map<string, TeamMember>();
 		for (const m of cfgMembers) cfgByName.set(m.name, m);
 
-		const workerNames = getVisibleWorkerNames({ teammates, teamConfig, tasks: allTasks });
+		const workerNames = new Set<string>();
+		for (const n of teammates.keys()) workerNames.add(n);
+		for (const m of cfgMembers) {
+			if (m.role === "worker" && m.status === "online") workerNames.add(m.name);
+		}
 
-		if (workerNames.length === 0) {
+		if (workerNames.size === 0) {
 			ctx.ui.notify(`No ${strings.memberTitle.toLowerCase()}s`, "info");
 			return;
 		}
 
 		const lines: string[] = [];
-		for (const n of workerNames) {
+		for (const n of Array.from(workerNames).sort()) {
 			const rpc = teammates.get(n);
 			const cfg = cfgByName.get(n);
 			const displayStatus = resolveDisplayStatus(rpc, cfg);
@@ -192,8 +201,13 @@ export async function handleTeamStatusCommand(opts: {
 			const tool = toolActivity(activity.currentToolName);
 			const toolTag = tool ? ` (${tool})` : "";
 			const stalledTag = displayStatus === "stalled" ? " ⚠ STALLED" : "";
-			const usage = formatUsageBreakdown(activity.usage, { fallbackTotal: activity.totalTokens });
-			lines.push(`${formatMemberDisplayName(style, n)}: ${displayStatus} ${elapsed}${toolTag} · ${usage}${stalledTag}`);
+			const memberModel = getMemberModel(cfg);
+			const memberThinking = getMemberThinking(cfg);
+			const badges: string[] = [];
+			if (memberModel) badges.push(shortModelLabel(memberModel));
+			if (memberThinking && memberThinking !== "off") badges.push(`t:${memberThinking}`);
+			const badgeTag = badges.length > 0 ? ` · ${badges.join("/")}` : "";
+			lines.push(`${formatMemberDisplayName(style, n)}: ${displayStatus} ${elapsed}${badgeTag}${toolTag} · ${formatTokens(activity.totalTokens)} tokens${stalledTag}`);
 		}
 		ctx.ui.notify(lines.join("\n"), "info");
 		return;
@@ -203,8 +217,7 @@ export async function handleTeamStatusCommand(opts: {
 	const name = sanitizeName(nameRaw);
 	const rpc = teammates.get(name);
 	const memberCfg = (teamConfig?.members ?? []).find((m) => m.name === name);
-	const owned = allTasks.filter((t) => t.owner === name);
-	if (!rpc && !memberCfg && !owned.some((t) => t.status === "in_progress")) {
+	if (!rpc && !memberCfg) {
 		ctx.ui.notify(`Unknown ${strings.memberTitle.toLowerCase()}: ${name}`, "error");
 		return;
 	}
@@ -215,8 +228,11 @@ export async function handleTeamStatusCommand(opts: {
 	const noEventFor = rpc ? formatElapsed(Date.now() - rpc.lastEventAt) : "";
 	const currentTool = toolActivity(activity.currentToolName);
 	const msgPreview = lastMessageSummary(rpc, 120);
+	const allTasks = await listTasks(teamDir, effectiveTlId);
+	const owned = allTasks.filter((t) => t.owner === name);
 	const activeTask = owned.find((t) => t.status === "in_progress");
-	const model = memberCfg?.meta?.["model"];
+	const memberModel = getMemberModel(memberCfg);
+	const memberThinking = getMemberThinking(memberCfg);
 	const cwd = memberCfg?.cwd;
 
 	const lines: string[] = [
@@ -224,9 +240,10 @@ export async function handleTeamStatusCommand(opts: {
 		`time in state: ${elapsed || "(unknown)"}`,
 		`last event: ${noEventFor || "(unknown)"} ago`,
 		`current activity: ${currentTool || "(none)"}`,
-		`tool calls: ${activity.toolUseCount} · turns: ${activity.turnCount} · usage: ${formatUsageBreakdown(activity.usage, { includeCost: true, fallbackTotal: activity.totalTokens })}`,
+		`tool calls: ${activity.toolUseCount} · turns: ${activity.turnCount} · tokens: ${formatTokens(activity.totalTokens)}`,
 	];
-	if (typeof model === "string" && model) lines.push(`model: ${model}`);
+	if (memberModel) lines.push(`model: ${memberModel}`);
+	if (memberThinking) lines.push(`thinking: ${memberThinking}`);
 	if (cwd) lines.push(`cwd: ${cwd}`);
 	if (activeTask) lines.push(`active task: #${activeTask.id} ${activeTask.subject}`);
 	lines.push(`tasks: ${owned.filter((t) => t.status === "pending").length} pending · ${owned.filter((t) => t.status === "in_progress").length} in-progress · ${owned.filter((t) => t.status === "completed").length} completed`);

@@ -262,7 +262,9 @@ tool actions, but are continuously visible — no extra tool calls needed.
 
 The widget and panel show real-time worker state at a glance:
 
+- **Task progress**: per-worker counts of pending, active (in-progress), and done tasks; total row with completion percentage
 - **Time in state**: how long a worker has been in its current status (e.g. `3m12s`)
+- **Active task ID**: shown inline next to status in the persistent widget (e.g. `streaming #3 2m15s`)
 - **Stall detection**: when a streaming worker hasn't emitted any agent event for > 5 minutes, status changes to `⚠ stalled` (configurable via `PI_TEAMS_STALL_THRESHOLD_MS`)
 - **Last message summary**: most recent assistant text (first 80–100 chars) visible in the panel's selected-worker detail section
 - **Model per worker**: shown in the panel detail view when available
@@ -362,7 +364,7 @@ Hooks run with working directory = the **leader session cwd** and receive contex
 - `PI_TEAMS_MEMBER`
 - `PI_TEAMS_TASK_ID`, `PI_TEAMS_TASK_SUBJECT`, `PI_TEAMS_TASK_OWNER`, `PI_TEAMS_TASK_STATUS`
 
-See [`docs/hook-contract.md`](docs/hook-contract.md) for the full versioned contract, JSON schema, and compatibility policy.
+See [`docs/hook-contract.md`](docs/hook-contract.md) for the full versioned contract, JSON schema, compatibility policy, and runtime version helpers (`checkHookContractVersion`, `parseHookContextSafe`).
 
 Hook policy can be controlled by agents at runtime via `teams` tool actions:
 

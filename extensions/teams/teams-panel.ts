@@ -1,6 +1,6 @@
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme, ThemeColor, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { TeammateHandle } from "./teammate-rpc.js";
+import type { TeammateRpc } from "./teammate-rpc.js";
 import type { ActivityTracker, TranscriptLog, TranscriptEntry } from "./activity-tracker.js";
 import type { TeamTask } from "./task-store.js";
 import type { TeamConfig, TeamMember } from "./team-config.js";
@@ -9,16 +9,11 @@ import { formatMemberDisplayName, getTeamsStrings } from "./teams-style.js";
 import {
 	DISPLAY_STATUS_COLOR,
 	DISPLAY_STATUS_ICON,
-	addUsageBreakdown,
-	formatAggregatedUsageBreakdown,
 	formatElapsed,
 	formatTokens,
-	formatUsageBreakdown,
 	getMemberModel,
 	getMemberThinking,
-	getTaskProgressSummary,
 	getVisibleWorkerNames,
-	isUsageBreakdownEmpty,
 	lastMessageSummary,
 	padRight,
 	renderPolicySummary,
@@ -30,7 +25,7 @@ import {
 import type { DisplayStatus, LeaderModelInfo } from "./teams-ui-shared.js";
 
 export interface InteractiveWidgetDeps {
-	getTeammates(): Map<string, TeammateHandle>;
+	getTeammates(): Map<string, TeammateRpc>;
 	getTracker(): ActivityTracker;
 	getTranscript(name: string): TranscriptLog;
 	getTasks(): TeamTask[];
@@ -68,8 +63,9 @@ interface Row {
 	displayName: string;
 	statusKey: DisplayStatus;
 	pending: number;
+	inProgress: number;
 	completed: number;
-	usageStr: string;
+	tokensStr: string;
 	activityText: string;
 	elapsedStr: string;
 	lastMsgStr: string;
@@ -144,7 +140,7 @@ function getQualityGateSummary(task: TeamTask): string | null {
 function formatTranscriptEntry(entry: TranscriptEntry, theme: Theme, width: number): string[] {
 	const ts = formatTimestamp(entry.timestamp);
 	const tsStr = theme.fg("dim", ts);
-	const maxTextWidth = Math.max(1, width - 12); // " HH:MM:SS  " prefix; always consume input when very narrow
+	const maxTextWidth = width - 12; // " HH:MM:SS  " prefix
 
 	if (entry.kind === "text") {
 		// Wrap long text lines
@@ -205,8 +201,17 @@ function formatTranscriptEntry(entry: TranscriptEntry, theme: Theme, width: numb
 export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: InteractiveWidgetDeps): Promise<void> {
 	const style = deps.getStyle();
 	const strings = getTeamsStrings(style);
-	// Hide persistent widget while interactive one is open. Allow leader-only teams so
-	// the panel can still show leader tasks/policy and emergency controls.
+	const names = getVisibleWorkerNames({
+		teammates: deps.getTeammates(),
+		teamConfig: deps.getTeamConfig(),
+		tasks: deps.getTasks(),
+	});
+	if (names.length === 0) {
+		ctx.ui.notify(`No ${strings.memberTitle.toLowerCase()}s to show`, "info");
+		return;
+	}
+
+	// Hide persistent widget while interactive one is open.
 	deps.suppressWidget();
 
 	try {
@@ -324,8 +329,9 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 							displayName: strings.leaderControlTitle,
 							statusKey: "idle",
 							pending: leadTasks.filter((t) => t.status === "pending").length,
+							inProgress: leadTasks.filter((t) => t.status === "in_progress").length,
 							completed: leadTasks.filter((t) => t.status === "completed").length,
-							usageStr: "\u2014",
+							tokensStr: "\u2014",
 							activityText: "",
 							elapsedStr: "",
 							lastMsgStr: "",
@@ -356,8 +362,9 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 							displayName: formatMemberDisplayName(style, name),
 							statusKey,
 							pending: owned.filter((t) => t.status === "pending").length,
+							inProgress: owned.filter((t) => t.status === "in_progress").length,
 							completed: owned.filter((t) => t.status === "completed").length,
-							usageStr: formatUsageBreakdown(activity.usage, { fallbackTotal: activity.totalTokens }),
+							tokensStr: formatTokens(activity.totalTokens),
 							activityText: toolActivity(activity.currentToolName),
 							elapsedStr: elapsed,
 							lastMsgStr: lastMessageSummary(rpc, 80),
@@ -410,31 +417,29 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 						);
 					} else {
 						// Column widths
-						const progress = getTaskProgressSummary(tasks);
-						const totalPending = progress.pending;
-						const totalInProgress = progress.inProgress;
-						const totalCompleted = progress.completed;
-						let totalUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-						let fallbackOnlyTotal = 0;
-						for (const name of memberNames) {
-							const activity = tracker.get(name);
-							totalUsage = addUsageBreakdown(totalUsage, activity.usage);
-							if (activity.totalTokens > 0 && isUsageBreakdownEmpty(activity.usage)) fallbackOnlyTotal += activity.totalTokens;
-						}
-						const totalUsageStr = formatAggregatedUsageBreakdown(totalUsage, fallbackOnlyTotal);
+						const totalPending = tasks.filter((t) => t.status === "pending").length;
+						const totalInProgress = tasks.filter((t) => t.status === "in_progress").length;
+						const totalCompleted = tasks.filter((t) => t.status === "completed").length;
+						let totalTokensRaw = 0;
+						for (const name of memberNames) totalTokensRaw += tracker.get(name).totalTokens;
+						const totalTokensStr = formatTokens(totalTokensRaw);
 
 						const nameColWidth = Math.max(...rows.map((r) => visibleWidth(r.displayName)));
 						const pW = Math.max(
 							...rows.map((r) => String(r.pending).length),
 							String(totalPending).length,
 						);
+						const iW = Math.max(
+							...rows.map((r) => String(r.inProgress).length),
+							String(totalInProgress).length,
+						);
 						const cW = Math.max(
 							...rows.map((r) => String(r.completed).length),
 							String(totalCompleted).length,
 						);
-						const usageW = Math.max(
-							...rows.map((r) => r.usageStr.length),
-							totalUsageStr.length,
+						const tokW = Math.max(
+							...rows.map((r) => r.tokensStr.length),
+							totalTokensStr.length,
 						);
 
 						// Render rows
@@ -447,11 +452,12 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 								: theme.bold(r.displayName);
 							const statusLabel = theme.fg(DISPLAY_STATUS_COLOR[r.statusKey], padRight(r.statusKey, 9));
 							const pNum = String(r.pending).padStart(pW);
+							const iNum = String(r.inProgress).padStart(iW);
 							const cNum = String(r.completed).padStart(cW);
-							const usageStr = r.usageStr.padStart(usageW);
+							const tokStr = r.tokensStr.padStart(tokW);
 							const cols = theme.fg(
 								"dim",
-								` \u00b7 ${pNum} pending \u00b7 ${cNum} complete \u00b7 ${usageStr}`,
+								` \u00b7 ${pNum} pending \u00b7 ${iNum} active \u00b7 ${cNum} done \u00b7 ${tokStr} tokens`,
 							);
 							const elapsedLabel = r.elapsedStr ? " " + theme.fg("dim", r.elapsedStr) : "";
 							const actLabel = r.activityText
@@ -477,13 +483,17 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 						lines.push(truncateToWidth(sepLine, width));
 
 						const totalLabel = theme.bold("Total");
-						const pctLabel = theme.fg("success", padRight(`${progress.percent}%`, 9));
+						const totalTaskCount = totalPending + totalInProgress + totalCompleted;
+						const pct =
+							totalTaskCount > 0 ? Math.round((totalCompleted / totalTaskCount) * 100) : 0;
+						const pctLabel = theme.fg("success", padRight(`${pct}%`, 9));
 						const tpNum = String(totalPending).padStart(pW);
+						const tiNum = String(totalInProgress).padStart(iW);
 						const tcNum = String(totalCompleted).padStart(cW);
-						const totalUsagePadded = totalUsageStr.padStart(usageW);
+						const ttokStr = totalTokensStr.padStart(tokW);
 						const totalSuffix = theme.fg(
 							"muted",
-							` \u00b7 ${totalInProgress} in progress \u00b7 ${tpNum} pending \u00b7 ${tcNum} complete \u00b7 ${totalUsagePadded}`,
+							` \u00b7 ${tpNum} pending \u00b7 ${tiNum} active \u00b7 ${tcNum} done \u00b7 ${ttokStr} tokens`,
 						);
 						const totalRow = ` ${padRight(totalLabel, nameColWidth + 3)} ${pctLabel}${totalSuffix}`;
 						lines.push(truncateToWidth(totalRow, width));
@@ -580,7 +590,7 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 					const status = theme.fg(DISPLAY_STATUS_COLOR[statusKey], statusKey);
 					const elapsed = rpc ? formatElapsed(Date.now() - rpc.lastStatusChangeAt) : "";
 					const elapsedLabel = elapsed ? ` ${theme.fg("dim", elapsed)}` : "";
-					const usage = theme.fg("dim", formatUsageBreakdown(activity.usage, { fallbackTotal: activity.totalTokens }));
+					const tokens = theme.fg("dim", `${formatTokens(activity.totalTokens)} tokens`);
 					const taskLabel = activeTask
 						? ` ${theme.fg("muted", "\u00b7")} ${theme.fg("dim", `#${String(activeTask.id)} ${activeTask.subject}`)}`
 						: "";
@@ -593,7 +603,7 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 					const sessionBadgeStr = sessionBadges.length > 0
 						? ` ${theme.fg("muted", "\u00b7")} ${theme.fg("muted", sessionBadges.join(" \u00b7 "))}`
 						: "";
-					lines.push(truncateToWidth(` ${icon} ${nameStr} \u2014 ${status}${elapsedLabel} \u00b7 ${usage}${sessionBadgeStr}${taskLabel}`, width));
+					lines.push(truncateToWidth(` ${icon} ${nameStr} \u2014 ${status}${elapsedLabel} \u00b7 ${tokens}${sessionBadgeStr}${taskLabel}`, width));
 					const attachBanner = renderAttachBanner(width);
 					if (attachBanner) lines.push(attachBanner);
 					lines.push(truncateToWidth(` ${sep}`, width));
@@ -1210,7 +1220,7 @@ export async function openInteractiveWidget(ctx: ExtensionCommandContext, deps: 
 							return;
 						}
 						if (matchesKey(data, "down") || data === "s") {
-							cursorIndex = Math.max(0, Math.min(memberNames.length - 1, cursorIndex + 1));
+							cursorIndex = Math.min(memberNames.length - 1, cursorIndex + 1);
 							tui.requestRender();
 							return;
 						}
