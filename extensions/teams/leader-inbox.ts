@@ -311,7 +311,13 @@ export async function pollLeaderInbox(opts: {
 				}
 
 				if (idle.completedTaskId && idle.completedStatus === "failed") {
-					ctx.ui.notify(`${name} aborted task #${idle.completedTaskId}`, "warning");
+					const taskFailureReason = idle.taskFailureReason;
+					ctx.ui.notify(
+						taskFailureReason
+							? `${name} did not complete task #${idle.completedTaskId}: ${taskFailureReason}`
+							: `${name} aborted task #${idle.completedTaskId}`,
+						"warning",
+					);
 
 					// Inject failure notification into leader LLM conversation
 					if (sendLeaderLlmMessage) {
@@ -322,22 +328,23 @@ export async function pollLeaderInbox(opts: {
 						const partialResultRaw = task?.metadata?.["partialResult"];
 						const abortReason = typeof abortReasonRaw === "string" ? truncateResult(abortReasonRaw, 300) : undefined;
 						const partialResult = typeof partialResultRaw === "string" ? truncateResult(partialResultRaw, 300) : undefined;
-					const lines = [
-						`[Team] ${formatMemberDisplayName(style, name)} failed task #${idle.completedTaskId}${subject}`,
-					];
-					if (abortReason) lines.push(`Reason: ${abortReason}`);
-					if (partialResult) lines.push(`Partial result: ${partialResult}`);
-					const allTasks = await listTasks(teamDir, taskListId);
-					const pending = allTasks.filter((t) => t.status === "pending").length;
-					const inProgress = allTasks.filter((t) => t.status === "in_progress").length;
-					if (pending > 0 && inProgress === 0) {
-						lines.push(`State: ${pending} pending, ${inProgress} in progress.`);
-						lines.push(
-							"No tasks are currently in progress. Resolve blockers or reassign work and continue without waiting for the user.",
-						);
+						const lines = [
+							`[Team] ${formatMemberDisplayName(style, name)} failed to complete task #${idle.completedTaskId}${subject}`,
+						];
+						if (taskFailureReason) lines.push(`Reason: ${truncateResult(taskFailureReason, 300)}`);
+						else if (abortReason) lines.push(`Reason: ${abortReason}`);
+						if (partialResult) lines.push(`Partial result: ${partialResult}`);
+						const allTasks = await listTasks(teamDir, taskListId);
+						const pending = allTasks.filter((t) => t.status === "pending").length;
+						const inProgress = allTasks.filter((t) => t.status === "in_progress").length;
+						if (pending > 0 && inProgress === 0) {
+							lines.push(`State: ${pending} pending, ${inProgress} in progress.`);
+							lines.push(
+								"No tasks are currently in progress. Resolve blockers or reassign work and continue without waiting for the user.",
+							);
+						}
+						sendLeaderLlmMessage(lines.join("\n"), { deliverAs: "followUp" });
 					}
-					sendLeaderLlmMessage(lines.join("\n"), { deliverAs: "followUp" });
-				}
 			} else if (idle.completedTaskId) {
 					ctx.ui.notify(`${name} completed task #${idle.completedTaskId}`, "info");
 
@@ -386,9 +393,10 @@ export async function pollLeaderInbox(opts: {
 			continue;
 		}
 
-		// Unrecognized message = teammate DM → route to leader LLM context
+		// Unrecognized message = teammate DM → route to leader LLM context.
+		// Urgent worker-to-lead DMs interrupt the current leader turn; normal DMs queue as follow-ups.
 		if (sendLeaderLlmMessage) {
-			sendLeaderLlmMessage(`[Team DM] ${m.from}: ${m.text}`, { deliverAs: "followUp" });
+			sendLeaderLlmMessage(`[Team DM] ${m.from}: ${m.text}`, { deliverAs: m.urgent ? "steer" : "followUp" });
 		} else {
 			ctx.ui.notify(`Message from ${m.from}: ${m.text}`, "info");
 		}
