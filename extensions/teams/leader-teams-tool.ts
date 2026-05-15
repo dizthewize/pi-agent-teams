@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { StringEnum } from "@mariozechner/pi-ai";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeToMailbox } from "./mailbox.js";
 import { pickAgentNames, pickNamesFromPool, sanitizeName } from "./names.js";
 import { getTeamDir } from "./paths.js";

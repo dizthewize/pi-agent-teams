@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { writeToMailbox } from "./mailbox.js";

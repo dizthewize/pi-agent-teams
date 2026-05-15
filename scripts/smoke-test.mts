@@ -82,9 +82,9 @@ import { TeammateTmux } from "../extensions/teams/teammate-tmux.js";
 import { spawnWorkerPane, type TmuxContext, type TmuxExecutor } from "../extensions/teams/tmux-layout.js";
 import { getParentSessionId, shouldSilenceInheritedParentAttachClaimWarning } from "../extensions/teams/session-parent.js";
 import { branchSelectionNote, ensureSessionFileMaterialized, resolveBranchLeafSelection } from "../extensions/teams/session-branching.js";
-import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getTeamDir, validateTeamId } from "../extensions/teams/paths.js";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 // ── helpers ──────────────────────────────────────────────────────────
 let passed = 0;
