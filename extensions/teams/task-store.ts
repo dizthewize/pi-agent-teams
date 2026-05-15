@@ -263,7 +263,7 @@ export async function claimTask(
 	return await updateTask(teamDir, taskListId, taskId, (cur) => {
 		// Not claimable
 		if (cur.status !== "pending") return cur;
-		if (cur.owner) return cur;
+		if (cur.owner && cur.owner !== agentName) return cur;
 		return {
 			...cur,
 			owner: agentName,
@@ -403,7 +403,7 @@ export async function claimNextAvailableTask(
 	const tasks = await listTasks(teamDir, taskListId);
 	for (const t of tasks) {
 		if (t.status !== "pending") continue;
-		if (t.owner) continue;
+		if (t.owner && t.owner !== agentName) continue;
 		if (await isTaskBlocked(teamDir, taskListId, t)) continue;
 
 		const claimed = await claimTask(teamDir, taskListId, t.id, agentName, { checkAgentBusy: false });

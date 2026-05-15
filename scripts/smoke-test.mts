@@ -2000,3 +2000,5 @@ console.log(`${"═".repeat(50)}\n`);
 fs.rmSync(tmpRoot, { recursive: true, force: true });
 
 process.exit(failed > 0 ? 1 : 0);
+
+}

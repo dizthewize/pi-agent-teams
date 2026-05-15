@@ -660,7 +660,7 @@ export function runLeader(pi: ExtensionAPI): void {
 
 		const teamsEntry = getTeamsExtensionEntryPath();
 		if (teamsEntry) {
-			argsForChild.push("--no-extensions", "-e", teamsEntry);
+			argsForChild.push("-e", teamsEntry);
 		}
 
 		const strings = getTeamsStrings(style);
@@ -703,8 +703,9 @@ export function runLeader(pi: ExtensionAPI): void {
 				args: argsForChild,
 			});
 		} catch (err) {
+			const stderr = t instanceof TeammateRpc ? t.getStderr() : "";
 			teammates.delete(name);
-			return { ok: false, error: err instanceof Error ? err.message : String(err) };
+			return { ok: false, error: (err instanceof Error ? err.message : String(err)) + (stderr ? ` (stderr: ${stderr.slice(-200)})` : "") };
 		}
 
 		const sessionName = `pi agent teams - ${strings.memberTitle.toLowerCase()} ${name}`;
@@ -713,7 +714,8 @@ export function runLeader(pi: ExtensionAPI): void {
 		try {
 			await t.setSessionName(sessionName);
 		} catch (err) {
-			warnings.push(`Failed to set session name for ${name}: ${err instanceof Error ? err.message : String(err)}`);
+			const stderr = t instanceof TeammateRpc ? t.getStderr() : "";
+			warnings.push(`Failed to set session name for ${name}: ${err instanceof Error ? err.message : String(err)}` + (stderr ? ` (stderr: ${stderr.slice(-200)})` : ""));
 		}
 
 		// Also send via mailbox so non-RPC/manual workers can be named the same way.
@@ -856,81 +858,6 @@ export function runLeader(pi: ExtensionAPI): void {
 			}
 		}, 1000);
 		// Don't keep non-interactive/child pi processes alive just because leader polling exists.
-		refreshTimer.unref?.();
-
-		inboxTimer = setInterval(async () => {
-			if (isStopping) return;
-			if (inboxInFlight) return;
-			inboxInFlight = true;
-			try {
-				await pollLeaderInbox();
-			} finally {
-				inboxInFlight = false;
-			}
-		}, 700);
-		inboxTimer.unref?.();
-	});
-
-	pi.on("session_switch", async (_event, ctx) => {
-		const prevTeamId = currentTeamId;
-		const prevCwd = currentCtx?.cwd;
-
-		if (currentCtx) {
-			await releaseActiveAttachClaim(currentCtx);
-			const strings = getTeamsStrings(style);
-			await stopAllTeammates(currentCtx, `The ${strings.teamNoun} is dissolved — leader moved on`);
-		}
-		stopLoops();
-		delegationTracker.clear();
-		leaderWakeTracker.clear();
-
-		// Clean up worktrees from the old session before switching.
-		// Only clean up teams this session owns — never attached teams.
-		const prevSessionId = currentCtx?.sessionManager.getSessionId();
-		if (prevTeamId && prevTeamId === prevSessionId) {
-			const teamDir = getTeamDir(prevTeamId);
-			try {
-				await cleanupWorktrees({ teamDir, teamId: prevTeamId, repoCwd: prevCwd });
-			} catch {
-				// Best-effort — don't block session switch.
-			}
-		}
-
-		currentCtx = ctx;
-		currentTeamId = currentCtx.sessionManager.getSessionId();
-		inheritedParentTeamId = getParentSessionId(currentCtx.sessionManager);
-		// Keep the task list aligned with the active session. If you want a shared namespace,
-		// use `/team task use <taskListId>` after switching.
-		taskListId = currentTeamId;
-		leaderWakeTracker.clear();
-		lastAttachClaimHeartbeatMs = 0;
-		// Clear any /team done suppression — new session context.
-		widgetSuppressed = false;
-		autoDoneNotified = false;
-
-		await ensureTeamConfig(getTeamDir(currentTeamId), {
-			teamId: currentTeamId,
-			taskListId: taskListId,
-			leadName: "team-lead",
-			style,
-		});
-
-		await refreshTasks();
-		renderWidget();
-
-		// Restart background refresh/poll loops for the new session.
-		refreshTimer = setInterval(async () => {
-			if (isStopping) return;
-			if (refreshInFlight) return;
-			refreshInFlight = true;
-			try {
-				await heartbeatActiveAttachClaim(ctx);
-				await refreshTasks();
-				renderWidget();
-			} finally {
-				refreshInFlight = false;
-			}
-		}, 1000);
 		refreshTimer.unref?.();
 
 		inboxTimer = setInterval(async () => {

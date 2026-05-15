@@ -45,6 +45,10 @@ export interface LockOptions {
 	pollMs?: number;
 	/** Optional label to help debugging (written into lock file). */
 	label?: string;
+	/** When true, attempt to recover locks abandoned by crashed processes. */
+	recoverAbandoned?: boolean;
+	/** Grace period for locks with an invalid PID format before considering them stale. */
+	invalidLockGraceMs?: number;
 }
 
 /**

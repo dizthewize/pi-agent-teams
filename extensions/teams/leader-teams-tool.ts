@@ -31,7 +31,7 @@ import {
 	unassignTasksForAgent,
 	updateTask,
 } from "./task-store.js";
-import type { TeammateRpc } from "./teammate-rpc.js";
+import type { TeammateHandle } from "./teammate-rpc.js";
 import type { ActivityTracker } from "./activity-tracker.js";
 import {
 	resolveDisplayStatus,
@@ -169,7 +169,7 @@ type TeamsToolParamsType = Static<typeof TeamsToolParamsSchema>;
 
 export function registerTeamsTool(opts: {
 	pi: ExtensionAPI;
-	teammates: Map<string, TeammateRpc>;
+	teammates: Map<string, TeammateHandle>;
 	spawnTeammate: SpawnTeammateFn;
 	getTeamId: (ctx: Parameters<SpawnTeammateFn>[0]) => string;
 	getTaskListId: () => string | null;
