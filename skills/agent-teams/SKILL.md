@@ -1,6 +1,6 @@
 ---
 name: agent-teams
-description: "Parallel agent teamwork for Pi. Spawn child Pi processes as teammates, assign tasks from a shared queue, and receive structured results back via mailbox. Use when: (1) the user wants parallel work on multiple tasks, (2) a task is large enough to split across agents, (3) the user wants a dedicated agent for a specific concern (frontend, backend, tests, docs), (4) managing active teammates, reviewing task progress, or coordinating via messages. NOT for sequential single-agent work — use regular Pi for that."
+description: "Coordinate multi-agent teamwork with shared task lists, mailbox messaging, and long-lived teammates. Use when the user asks to spawn workers, delegate tasks, work in parallel with agents, or manage a team of workers."
 ---
 
 # Agent Teams
