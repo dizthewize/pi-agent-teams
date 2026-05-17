@@ -310,6 +310,44 @@ Previously, teammate spawn included `--no-extensions`, which prevented child Pi 
 
 Tasks created with `/team task add <name>: <description>` (pre-assigned during creation) were not claimed by teammates on spawn. The spawn logic now checks for pre-assigned tasks matching the teammate name and claims them immediately, on top of normal unassigned task auto-claiming.
 
+## Skill frontmatter conventions
+
+Every skill Pi discovers is a `SKILL.md` file with a YAML frontmatter block. The `description` field serves **two conflicting purposes** -- discovery (Pi must match it to user intent) and instruction (the model must understand what the skill does). Getting the balance wrong breaks the skill.
+
+### The `description` field is a routing signal first
+
+Pi's skill discovery mechanism uses the `description` string to route slash-command invocations. If the description is too verbose, Pi fails to match the skill; if it's too terse, the model doesn't know when to use it. The `SKILL.md` frontmatter is **not** a free-form prompt -- it is a structured routing signal with an embedded instruction layer.
+
+### What worked: guardrails format (`Use when: / NOT for:`)
+
+The `agent-teams` skill description has been through three documented phases.
+
+| Phase | Commit | Description style | Result |
+|---|---|---|---|
+| Original | `6928b34` (initial) | Single sentence | Model used `teams` for everything, including sequential work |
+| Richer | N/A (attempted) | Expanded prose | **Broke skill discovery entirely** -- Pi couldn't match it, skill was unreachable |
+| Guardrails | `39e3396` (current) | Original sentence + `Use when: (1)...` + `NOT for:` | **Discoverable AND discriminating** |
+
+The current `description` (excerpt):
+
+```yaml
+description: "Parallel agent teamwork for Pi. Spawn child Pi processes as teammates, assign tasks from a shared queue, and receive structured results back via mailbox. Use when: (1) the user wants parallel work on multiple tasks, (2) a task is large enough to split across agents, (3) the user wants a dedicated agent for a specific concern (frontend, backend, tests, docs), (4) managing active teammates, reviewing task progress, or coordinating via messages. NOT for sequential single-agent work -- use regular Pi for that."
+```
+
+**Why it works:**
+
+1. **Preserve the original sentence** -- This is the discovery fingerprint. The model looks for "spawn child Pi processes" and "teammates" to route to `agent-teams`.
+2. **Append guardrails (not paragraphs)** -- `Use when: (1)...(4)` gives the model explicit triggers. `NOT for:` gives the model explicit exclusions. Both are structured, scannable, and don't dilute the routing signal.
+3. **Never use prose walls** -- Extended paragraphs shift the embedding vector away from the matching centroid. The skill becomes unfindable.
+
+### Rule of thumb
+
+- Single sentence (1 line) for the concept
+- `Use when: (N)` list for triggers, max 4 items, each 1 clause
+- `NOT for:` for exclusions, 1 clause
+- Total: 2--4 lines of YAML value
+- Full protocol goes in `~/.pi/prompts/*.md` (no discovery constraints)
+
 ## Configuration
 
 | Environment variable | Purpose | Default |
