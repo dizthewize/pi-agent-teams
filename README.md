@@ -215,6 +215,7 @@ All management commands live under `/team`.
 
 | Command | Description |
 | --- | --- |
+| `/team help` | Show structured help with sections, examples, env vars, and tips |
 | `/team spawn <name> [fresh\|branch] [shared\|worktree] [plan] [--model <provider>/<modelId>] [--thinking <level>]` | Start a teammate |
 | `/team list` | List teammates and their status |
 | `/team status [name]` | Real-time worker state: stall detection, time in state, activity (omit name for summary) |
@@ -299,12 +300,22 @@ The `member_status` tool action provides the same information programmatically f
 | `/team task dep ls <id>` | Show deps and blocks |
 | `/team task clear [completed\|all]` | Delete task files |
 
+## Known Issues
+
+### `--no-extensions` removed from spawn (fixed in v0.5.6)
+
+Previously, teammate spawn included `--no-extensions`, which prevented child Pi processes from loading provider packages. This broke model selection for teammates who explicitly requested provider-specific models (e.g. `anthropic/claude-sonnet`). The flag has been removed. Child processes now load extensions normally.
+
+### Auto-claim of pre-assigned tasks (fixed in v0.5.6)
+
+Tasks created with `/team task add <name>: <description>` (pre-assigned during creation) were not claimed by teammates on spawn. The spawn logic now checks for pre-assigned tasks matching the teammate name and claims them immediately, on top of normal unassigned task auto-claiming.
+
 ## Configuration
 
 | Environment variable | Purpose | Default |
 | --- | --- | --- |
 | `PI_TEAMS_ROOT_DIR` | Storage root (absolute or relative to `~/.pi/agent`) | `~/.pi/agent/teams` |
-| `PI_TEAMS_DEFAULT_AUTO_CLAIM` | Whether spawned teammates auto-claim tasks | `1` (on) |
+| `PI_TEAMS_DEFAULT_AUTO_CLAIM` | Whether spawned teammates auto-claim tasks (including pre-assigned tasks) | `1` (on) |
 | `PI_TEAMS_SPAWN_MODE` | Spawn backend: unset for managed RPC subprocesses, `tmux` for interactive tmux panes | unset |
 | `PI_TEAMS_TMUX_LEADER_WIDTH_PCT` | In tmux spawn mode, percentage of window width reserved for the leader pane | `40` |
 | `PI_TEAMS_STYLE` | UI style id (built-in: `normal`, `soviet`, `pirate`, or custom) | `normal` |

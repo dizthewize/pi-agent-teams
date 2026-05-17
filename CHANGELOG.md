@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.6] - 2026-05-15
+
+### Added
+- **Enhanced `/team help`** -- Structured sections (spawn, tasks, messaging, lifecycle, plan approvals, team management), inline examples, environment variable reference (`PI_TEAMS_STYLE`, `PI_TEAMS_SPAWN_MODE`, `PI_TEAMS_AUTO_CLAIM`, `PI_TEAMS_ROOT_DIR`), and tips (branch vs. fresh, worktree mode, pre-assigned tasks). Replaces flat command list. (Commit `8e74223`)
+
+### Fixed
+- **Removed `--no-extensions` from teammate spawn args** -- The `--no-extensions` flag was preventing child Pi processes from loading provider packages (e.g., `anthropic`, `openai`, `google`), causing model selection errors for spawned teammates who explicitly requested models from those providers. Child processes now load extensions normally. Only the leader's `teamsEntry` is still passed via `-e`. (Commit `3777da6`)
+- **Auto-claim of pre-assigned tasks** -- Teammates spawned via `member_spawn` or `delegate` with `maxTeammates` now correctly auto-claim tasks that were pre-assigned to their names during task creation, in addition to unassigned unblocked tasks. Previously, pre-assigned tasks were ignored unless manually reassigned after spawn. (Commit `3777da6`)
+
 ## [0.5.5] - 2026-05-07
 
 ### Changed
